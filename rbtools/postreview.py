@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 import cookielib
 import difflib
 import getpass
@@ -1994,10 +1995,13 @@ class GitClient(SCMClient):
         self.head_ref = execute(['git', 'symbolic-ref', '-q', 'HEAD']).strip()
 
         # We know we have something we can work with. Let's find out
-        # what it is. We'll try SVN first.
-        data = execute(["git", "svn", "info"], ignore_errors=True)
+        # what it is. We'll try SVN first (if we're allowed to do so).
+        if not options.git_only:
+            data = execute(["git", "svn", "info"], ignore_errors=True)
+            m = re.search(r'^Repository Root: (.+)$', data, re.M)
+        else:
+            m = None
 
-        m = re.search(r'^Repository Root: (.+)$', data, re.M)
         if m:
             path = m.group(1)
             m = re.search(r'^URL: (.+)$', data, re.M)
@@ -2594,6 +2598,9 @@ def parse_options(args):
                       help="the url for a repository for creating a diff "
                            "outside of a working copy (currently only supported "
                            "by Subversion).  Requires --revision-range")
+    parser.add_option("--git-only",
+                      dest="git_only", action="store_true", default=False,
+                      help="force generation of git diff on a git repository")
     parser.add_option("-d", "--debug",
                       action="store_true", dest="debug", default=DEBUG,
                       help="display debug output")
