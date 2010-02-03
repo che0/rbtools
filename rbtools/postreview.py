@@ -15,6 +15,7 @@ import sys
 import tempfile
 import urllib
 import urllib2
+import ConfigParser
 from optparse import OptionParser
 from tempfile import mkstemp
 from urlparse import urljoin, urlparse
@@ -245,8 +246,14 @@ class ReviewBoardHTTPPasswordMgr(urllib2.HTTPPasswordMgr):
     def __init__(self, reviewboard_url):
         self.passwd  = {}
         self.rb_url  = reviewboard_url
-        self.rb_user = None
-        self.rb_pass = None
+        try:
+            config = ConfigParser.SafeConfigParser()
+            config.read(os.path.expanduser('~/.postreview'))
+            self.rb_user = config.get('http_auth', 'username')
+            self.rb_pass = config.get('http_auth', 'password')
+        except (ConfigParser.NoSectionError, ConfigParser.NoOptionError):
+            self.rb_user = None
+            self.rb_pass = None
 
     def find_user_password(self, realm, uri):
         if uri.startswith(self.rb_url):
