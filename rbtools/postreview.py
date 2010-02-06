@@ -115,7 +115,22 @@ options = None
 
 
 class APIError(Exception):
-    pass
+    def __init__(self, http_status, error_code, rsp=None, *args, **kwargs):
+        Exception.__init__(self, *args, **kwargs)
+        self.http_status = http_status
+        self.error_code = error_code
+        self.rsp = rsp
+
+    def __str__(self):
+        code_str = "HTTP %d" % self.http_status
+
+        if self.error_code:
+            code_str += ', API Error %d' % self.error_code
+
+        if 'err' in self.rsp:
+            return '%s (%s)' % (self.rsp['err']['msg'], code_str)
+        else:
+            return code_str
 
 
 class RepositoryInfo:
@@ -196,8 +211,7 @@ class SvnRepositoryInfo(RepositoryInfo):
             # If the server couldn't fetch the repository info, it will return
             # code 210. Ignore those.
             # Other more serious errors should still be raised, though.
-            rsp = e.args[0]
-            if rsp['err']['code'] == 210:
+            if e.error_code == 210:
                 return None
 
             raise e
@@ -335,10 +349,7 @@ class ReviewBoardServer(object):
                 'password': password,
             })
         except APIError, e:
-            rsp, = e.args
-
-            die("Unable to log in: %s (%s)" % (rsp["err"]["msg"],
-                                               rsp["err"]["code"]))
+            die("Unable to log in: %s" % e)
 
         debug("Logged in.")
 
@@ -413,9 +424,7 @@ class ReviewBoardServer(object):
 
             rsp = self.api_post('api/json/reviewrequests/new/', data)
         except APIError, e:
-            rsp, = e.args
-
-            if rsp['err']['code'] == 204: # Change number in use
+            if e.error_code == 204: # Change number in use
                 if options.diff_only:
                     # In this case, fall through and return to tempt_fate.
                     debug("Review request already exists.")
@@ -525,9 +534,25 @@ class ReviewBoardServer(object):
         rsp = json.loads(data)
 
         if rsp['stat'] == 'fail':
-            raise APIError, rsp
+            self.process_error(200, data)
 
         return rsp
+
+    def process_error(self, http_status, data):
+        """Processes an error, raising an APIError with the information."""
+        try:
+            rsp = json.loads(data)
+
+            assert rsp['stat'] == 'fail'
+
+            debug("Got API Error %d (HTTP code %d): %s" %
+                  (rsp['err']['code'], http_status, rsp['err']['msg']))
+            debug("Error data: %r" % rsp)
+            raise APIError(http_status, rsp['err']['code'], rsp,
+                           rsp['err']['msg'])
+        except ValueError:
+            debug("Got HTTP error: %s: %s" % (http_status, data))
+            raise APIError(http_status, None, None, data)
 
     def http_get(self, path):
         """
@@ -537,19 +562,9 @@ class ReviewBoardServer(object):
         debug('HTTP GETting %s' % path)
 
         url = self._make_url(path)
-
-        try:
-            rsp = urllib2.urlopen(url).read()
-            self.cookie_jar.save(self.cookie_file)
-            return rsp
-        except urllib2.HTTPError, e:
-            print "Unable to access %s (%s). The host path may be invalid" % \
-                (url, e.code)
-            try:
-                debug(e.read())
-            except AttributeError:
-                pass
-            die()
+        rsp = urllib2.urlopen(url).read()
+        self.cookie_jar.save(self.cookie_file)
+        return rsp
 
     def _make_url(self, path):
         """Given a path on the server returns a full http:// style url"""
@@ -567,7 +582,10 @@ class ReviewBoardServer(object):
         """
         Performs an API call using HTTP GET at the specified path.
         """
-        return self.process_json(self.http_get(path))
+        try:
+            return self.process_json(self.http_get(path))
+        except urllib2.HTTPError, e:
+            self.process_error(e.code, e.read())
 
     def http_post(self, path, fields, files=None):
         """
@@ -603,15 +621,15 @@ class ReviewBoardServer(object):
 
             die("Unable to access %s. The host path may be invalid\n%s" % \
                 (url, e))
-        except urllib2.HTTPError, e:
-            die("Unable to access %s (%s). The host path may be invalid\n%s" % \
-                (url, e.code, e.read()))
 
     def api_post(self, path, fields=None, files=None):
         """
         Performs an API call using HTTP POST at the specified path.
         """
-        return self.process_json(self.http_post(path, fields, files))
+        try:
+            return self.process_json(self.http_post(path, fields, files))
+        except urllib2.HTTPError, e:
+            self.process_error(e.code, e.read())
 
     def _encode_multipart_formdata(self, fields, files):
         """
@@ -643,7 +661,7 @@ class ReviewBoardServer(object):
 
         content_type = "multipart/form-data; boundary=%s" % BOUNDARY
 
-        return content_type, content
+        return content_type, content.encode('utf-8')
 
 
 class SCMClient(object):
@@ -1620,13 +1638,13 @@ class PerforceClient(SCMClient):
             description = execute(["p4", "describe", "-s", changenum],
                                   split_lines=True)
 
-            if '*pending*' in description[0]:
+            # Some P4 wrappers are addding an extra line before the description
+            if '*pending*' in description[0] or '*pending*' in description[1]:
                 cl_is_pending = True
-                description = []
 
         v = self.p4d_version
 
-        if cl_is_pending and (v[1] < 2002 or (v[1] == "2002" and v[2] < 2)):
+        if cl_is_pending and (v[0] < 2002 or (v[0] == "2002" and v[1] < 2)):
             # Pre-2002.2 doesn't give file list in pending changelists, so we
             # have to get it a different way
             info = execute(["p4", "opened", "-c", str(changenum)],
@@ -1641,10 +1659,10 @@ class PerforceClient(SCMClient):
             for line_num, line in enumerate(description):
                 if 'Affected files ...' in line:
                     break
-                else:
-                    # Got to the end of all the description lines and didn't find
-                    # what we were looking for.
-                    die("Couldn't find any affected files for this change.")
+            else:
+                # Got to the end of all the description lines and didn't find
+                # what we were looking for.
+                die("Couldn't find any affected files for this change.")
 
             description = description[line_num+2:]
 
@@ -2427,7 +2445,11 @@ def tempt_fate(server, tool, changenum, diff_content=None,
             server.set_review_request_field(review_request, 'branch',
                                             options.branch)
 
-        if options.bugs_closed:
+        if options.bugs_closed:     # append to existing list
+            options.bugs_closed = options.bugs_closed.strip(", ")
+            bug_set = set(re.split("[, ]+", options.bugs_closed)) | \
+                      set(review_request['bugs_closed'])
+            options.bugs_closed = ",".join(bug_set)
             server.set_review_request_field(review_request, 'bugs_closed',
                                             options.bugs_closed)
 
@@ -2439,8 +2461,7 @@ def tempt_fate(server, tool, changenum, diff_content=None,
             server.set_review_request_field(review_request, 'testing_done',
                                             options.testing_done)
     except APIError, e:
-        rsp, = e.args
-        if rsp['err']['code'] == 103: # Not logged in
+        if e.error_code == 103: # Not logged in
             retries = retries - 1
 
             # We had an odd issue where the server ended up a couple of
@@ -2455,11 +2476,9 @@ def tempt_fate(server, tool, changenum, diff_content=None,
                 return
 
         if options.rid:
-            die("Error getting review request %s: %s (code %s)" % \
-                (options.rid, rsp['err']['msg'], rsp['err']['code']))
+            die("Error getting review request %s: %s" % (options.rid, e))
         else:
-            die("Error creating review request: %s (code %s)" % \
-                (rsp['err']['msg'], rsp['err']['code']))
+            die("Error creating review request: %s" % e)
 
 
     if not server.info.supports_changesets or not options.change_only:
@@ -2467,10 +2486,7 @@ def tempt_fate(server, tool, changenum, diff_content=None,
             server.upload_diff(review_request, diff_content,
                                parent_diff_content)
         except APIError, e:
-            rsp, = e.args
-            print "Error uploading diff: %s (%s)" % (rsp['err']['msg'],
-                                                     rsp['err']['code'])
-            debug(rsp)
+            print "Error uploading diff: %s" % e
             die("Your review request still exists, but the diff is not " +
                 "attached.")
 
