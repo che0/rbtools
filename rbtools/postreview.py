@@ -39,6 +39,9 @@ if (sys.platform.startswith('win')
 else:
     import posixpath as cpath
 
+from rbtools import get_package_version, get_version_string
+
+
 ###
 # Default configuration -- user-settable variables follow.
 ###
@@ -107,11 +110,13 @@ DEBUG           = False
 ###
 
 
-VERSION = "0.8"
-
 user_config = None
 tempfiles = []
 options = None
+
+ADD_REPOSITORY_DOCS_URL = \
+    'http://www.reviewboard.org/docs/manual/dev/admin/management/repositories/'
+GNU_DIFF_WIN32_URL = 'http://gnuwin32.sourceforge.net/packages/diffutils.htm'
 
 
 class APIError(Exception):
@@ -127,7 +132,7 @@ class APIError(Exception):
         if self.error_code:
             code_str += ', API Error %d' % self.error_code
 
-        if 'err' in self.rsp:
+        if self.rsp and 'err' in self.rsp:
             return '%s (%s)' % (self.rsp['err']['msg'], code_str)
         else:
             return code_str
@@ -311,7 +316,7 @@ class ReviewBoardServer(object):
         opener = urllib2.build_opener(cookie_handler,
                                       basic_auth_handler,
                                       digest_auth_handler)
-        opener.addheaders = [('User-agent', 'post-review/' + VERSION)]
+        opener.addheaders = [('User-agent', 'RBTools/' + get_package_version())]
         urllib2.install_opener(opener)
 
     def login(self, force=False):
@@ -425,6 +430,8 @@ class ReviewBoardServer(object):
             rsp = self.api_post('api/json/reviewrequests/new/', data)
         except APIError, e:
             if e.error_code == 204: # Change number in use
+                rsp = e.rsp
+
                 if options.diff_only:
                     # In this case, fall through and return to tempt_fate.
                     debug("Review request already exists.")
@@ -433,10 +440,26 @@ class ReviewBoardServer(object):
                     rsp = self.api_post(
                         'api/json/reviewrequests/%s/update_from_changenum/' %
                         rsp['review_request']['id'])
+            elif e.error_code == 206: # Invalid repository
+                sys.stderr.write('\n')
+                sys.stderr.write('There was an error creating this review '
+                                 'request.\n')
+                sys.stderr.write('\n')
+                sys.stderr.write('The repository path "%s" is not in the\n' %
+                                 self.info.path)
+                sys.stderr.write('list of known repositories on the server.\n')
+                sys.stderr.write('\n')
+                sys.stderr.write('Ask the administrator to add this '
+                                 'repository to the Review Board server.\n')
+                sys.stderr.write('For information on adding repositories, '
+                                 'please read\n')
+                sys.stderr.write(ADD_REPOSITORY_DOCS_URL + '\n')
+                die()
             else:
                 raise e
+        else:
+            debug("Review request created")
 
-        debug("Review request created")
         return rsp['review_request']
 
     def set_review_request_field(self, review_request, field, value):
@@ -613,6 +636,9 @@ class ReviewBoardServer(object):
             data = urllib2.urlopen(r).read()
             self.cookie_jar.save(self.cookie_file)
             return data
+        except urllib2.HTTPError, e:
+            # Re-raise so callers can interpret it.
+            raise e
         except urllib2.URLError, e:
             try:
                 debug(e.read())
@@ -661,7 +687,7 @@ class ReviewBoardServer(object):
 
         content_type = "multipart/form-data; boundary=%s" % BOUNDARY
 
-        return content_type, content.encode('utf-8')
+        return content_type, content
 
 
 class SCMClient(object):
@@ -855,7 +881,7 @@ class ClearCaseClient(SCMClient):
             # Call cleartool to get this version and the previous version
             #   of the element.
             curr_version, pre_version = execute(
-                ["cleartool", "desc", "-pre", elem_path])
+                ["cleartool", "desc", "-pre", elem_path], split_lines=True)
             curr_version = cpath.normpath(curr_version)
             pre_version = pre_version.split(':')[1].strip()
 
@@ -1117,10 +1143,13 @@ class SVNClient(SCMClient):
         # Get the SVN repository path (either via a working copy or
         # a supplied URI)
         svn_info_params = ["svn", "info"]
+
         if options.repository_url:
             svn_info_params.append(options.repository_url)
+
         data = execute(svn_info_params,
                        ignore_errors=True)
+
         m = re.search(r'^Repository Root: (.+)$', data, re.M)
         if not m:
             return None
@@ -1136,6 +1165,10 @@ class SVNClient(SCMClient):
         m = re.search(r'^Repository UUID: (.+)$', data, re.M)
         if not m:
             return None
+
+        # Now that we know it's SVN, make sure we have GNU diff installed,
+        # and error out if we don't.
+        check_gnu_diff()
 
         return SvnRepositoryInfo(path, base_path, m.group(1))
 
@@ -1194,8 +1227,19 @@ class SVNClient(SCMClient):
 
             url = repository_info.path + repository_info.base_path
 
-            old_url = url + '@' + revisions[0]
             new_url = url + '@' + revisions[1]
+
+            # When the source revision is zero, assume the user wants to
+            # upload a diff containing all the files in ``base_path`` as new
+            # files. If the base path within the repository is added to both
+            # the old and new URLs, the ``svn diff`` command will error out
+            # since the base_path didn't exist at revision zero. To avoid
+            # that error, use the repository's root URL as the source for
+            # the diff.
+            if revisions[0] == "0":
+                url = repository_info.path
+
+            old_url = url + '@' + revisions[0]
 
             return self.do_diff(["svn", "diff", "--diff-cmd=diff", old_url,
                                  new_url] + files,
@@ -1317,8 +1361,9 @@ class SVNClient(SCMClient):
         if "\t" in s:
             # There's a \t separating the filename and info. This is the
             # best case scenario, since it allows for filenames with spaces
-            # without much work.
-            parts = s.split("\t")
+            # without much work. The info can also contain tabs after the
+            # initial one; ignore those when splitting the string.
+            parts = s.split("\t", 1)
 
         # There's spaces being used to separate the filename and info.
         # This is technically wrong, so all we can do is assume that
@@ -1644,9 +1689,11 @@ class PerforceClient(SCMClient):
 
         v = self.p4d_version
 
-        if cl_is_pending and (v[0] < 2002 or (v[0] == "2002" and v[1] < 2)):
-            # Pre-2002.2 doesn't give file list in pending changelists, so we
-            # have to get it a different way
+        if cl_is_pending and (v[0] < 2002 or (v[0] == "2002" and v[1] < 2)
+                              or changenum == "default"):
+            # Pre-2002.2 doesn't give file list in pending changelists,
+            # or we don't have a description for a default changeset,
+            # so we have to get it a different way.
             info = execute(["p4", "opened", "-c", str(changenum)],
                            split_lines=True)
 
@@ -1800,7 +1847,7 @@ class PerforceClient(SCMClient):
             dl.insert(0, "==== %s#%s ==%s== %s ====\n" % \
                 (depot_path, base_revision, changetype_short, local_path))
             dl.append('\n')
-        else:
+        elif len(dl) > 1:
             m = re.search(r'(\d\d\d\d-\d\d-\d\d \d\d:\d\d:\d\d)', dl[1])
             if m:
                 timestamp = m.group(1)
@@ -1838,6 +1885,8 @@ class PerforceClient(SCMClient):
             # that the resulting diff file isn't broken.
             if dl[-1][-1] != '\n':
                 dl.append('\n')
+        else:
+            die("ERROR, no valid diffs: %s" % dl[0])
 
         return dl
 
@@ -1932,6 +1981,10 @@ class MercurialClient(SCMClient):
                                   supports_parent_diffs=True)
 
         path = m.group(1).strip()
+        m2 = re.match(r'^(svn\+ssh|http|https)://([-a-zA-Z0-9.]*@)(.*)$',
+                      path)
+        if m2:
+            path = '%s://%s' % (m2.group(1), m2.group(3))
 
         return RepositoryInfo(path=path, base_path='',
                               supports_parent_diffs=True)
@@ -2327,6 +2380,31 @@ def check_install(command):
         return False
 
 
+def check_gnu_diff():
+    """Checks if GNU diff is installed, and informs the user if it's not."""
+    has_gnu_diff = False
+
+    try:
+        result = execute(['diff', '--version'], ignore_errors=True)
+        has_gnu_diff = 'GNU diffutils' in result
+    except OSError:
+        pass
+
+    if not has_gnu_diff:
+        sys.stderr.write('\n')
+        sys.stderr.write('GNU diff is required for Subversion '
+                         'repositories. Make sure it is installed\n')
+        sys.stderr.write('and in the path.\n')
+        sys.stderr.write('\n')
+
+        if os.name == 'nt':
+            sys.stderr.write('On Windows, you can install this from:\n')
+            sys.stderr.write(GNU_DIFF_WIN32_URL)
+            sys.stderr.write('\n')
+
+        die()
+
+
 def execute(command, env=None, split_lines=False, ignore_errors=False,
             extra_ignore_errors=(), translate_newlines=True):
     """
@@ -2486,7 +2564,19 @@ def tempt_fate(server, tool, changenum, diff_content=None,
             server.upload_diff(review_request, diff_content,
                                parent_diff_content)
         except APIError, e:
-            print "Error uploading diff: %s" % e
+            sys.stderr.write('\n')
+            sys.stderr.write('Error uploading diff\n')
+            sys.stderr.write('\n')
+
+            if e.error_code == 105:
+                sys.stderr.write('The generated diff file was empty. This '
+                                 'usually means no files were\n')
+                sys.stderr.write('modified in this change.\n')
+                sys.stderr.write('\n')
+                sys.stderr.write('Try running with --output-diff and --debug '
+                                 'for more information.\n')
+                sys.stderr.write('\n')
+
             die("Your review request still exists, but the diff is not " +
                 "attached.")
 
@@ -2508,7 +2598,7 @@ def tempt_fate(server, tool, changenum, diff_content=None,
 
 def parse_options(args):
     parser = OptionParser(usage="%prog [-pond] [-r review_id] [changenum]",
-                          version="%prog " + VERSION)
+                          version="RBTools " + get_version_string())
 
     parser.add_option("-p", "--publish",
                       dest="publish", action="store_true", default=PUBLISH,
@@ -2618,7 +2708,8 @@ def parse_options(args):
                       dest="repository_url", default=None,
                       help="the url for a repository for creating a diff "
                            "outside of a working copy (currently only supported "
-                           "by Subversion).  Requires --revision-range")
+                           "by Subversion). Requires either --revision-range"
+                           "or --diff-filename options")
     parser.add_option("--git-only",
                       dest="git_only", action="store_true", default=False,
                       help="force generation of git diff on a git repository")
@@ -2662,15 +2753,18 @@ def parse_options(args):
                              options.testing_file)
             sys.exit(1)
 
-    if options.repository_url and not options.revision_range:
-        sys.stderr.write("The --repository-url option requires the "
-                         "--revision-range option.\n")
+    if (options.repository_url and
+        not options.revision_range and
+        not options.diff_filename):
+        sys.stderr.write("The --repository-url option requires either the "
+                         "--revision-range option or the --diff-filename "
+                         "option.\n")
         sys.exit(1)
 
     return args
 
-def determine_client():
 
+def determine_client():
     repository_info = None
     tool = None
 
@@ -2707,6 +2801,7 @@ def determine_client():
         sys.exit(1)
 
     return (repository_info, tool)
+
 
 def main():
     origcwd = os.path.abspath(os.getcwd())
