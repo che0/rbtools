@@ -2110,7 +2110,7 @@ class GitClient(SCMClient):
 
         # Nope, it's git then.
         # Check for a tracking branch and determine merge-base
-        short_head = self.head_ref.split('/')[-1]
+        short_head = re.sub(r'^refs/heads/', '', self.head_ref)
         merge = execute(['git', 'config', '--get',
                          'branch.%s.merge' % short_head],
                         ignore_errors=True).strip()
