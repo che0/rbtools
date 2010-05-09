@@ -415,6 +415,32 @@ class GitClientTests(unittest.TestCase):
         ri = self.client.get_repository_info()
         self.assertEqual(self.client.diff(None), (diff, None))
 
+    def test_diff_slash_tracking(self):
+        """Test GitClient diff with tracking branch that has slash in its name"""
+        diff = "diff --git a/foo.txt b/foo.txt\n" \
+               "index 5e98e9540e1b741b5be24fcb33c40c1c8069c1fb..e619c1387f5feb91f0ca83194650bfe4f6c2e347 100644\n" \
+               "--- a/foo.txt\n" \
+               "+++ b/foo.txt\n" \
+               "@@ -1,4 +1,6 @@\n" \
+               " ARMA virumque cano, Troiae qui primus ab oris\n" \
+               "+ARMA virumque cano, Troiae qui primus ab oris\n" \
+               "+ARMA virumque cano, Troiae qui primus ab oris\n" \
+               " Italiam, fato profugus, Laviniaque venit\n" \
+               " litora, multum ille et terris iactatus et alto\n" \
+               " vi superum saevae memorem Iunonis ob iram;\n"
+
+        os.chdir(self.git_dir)
+        self._gitcmd(['checkout', '-b', 'not-master'])
+        self._git_add_file_commit('foo.txt', FOO1, 'commit 1')
+
+        os.chdir(self.clone_dir)
+        self._gitcmd(['fetch', 'origin'])
+        self._gitcmd(['checkout', '-b', 'my/branch', '--track', 'origin/not-master'])
+        self._git_add_file_commit('foo.txt', FOO2, 'commit 2')
+
+        ri = self.client.get_repository_info()
+        self.assertEqual(self.client.diff(None), (diff, None))
+
 
 class ApiTests(MockHttpUnitTest):
     SAMPLE_ERROR_STR = json.dumps({
