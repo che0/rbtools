@@ -2437,7 +2437,7 @@ def execute(command, env=None, split_lines=False, ignore_errors=False,
     if rc and not ignore_errors and rc not in extra_ignore_errors:
         die('Failed to execute command: %s\n%s' % (command, data))
 
-    return data.decode('utf-8')
+    return data
 
 
 def die(msg=None):
