@@ -2363,14 +2363,14 @@ def execute(command, env=None, split_lines=False, ignore_errors=False,
                              universal_newlines=translate_newlines,
                              env=env)
     if split_lines:
-        data = p.stdout.readlines()
+        data = map(lambda d: d.decode('utf-8'), p.stdout.readlines())
     else:
-        data = p.stdout.read()
+        data = p.stdout.read().decode('utf-8')
     rc = p.wait()
     if rc and not ignore_errors and rc not in extra_ignore_errors:
         die('Failed to execute command: %s\n%s' % (command, data))
 
-    return data.decode('utf-8')
+    return data
 
 
 def die(msg=None):
