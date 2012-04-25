@@ -2110,12 +2110,12 @@ class GitClient(SCMClient):
 
         # Nope, it's git then.
         # Check for a tracking branch and determine merge-base
-        short_head = re.sub(r'^refs/heads/', '', self.head_ref)
+        self.short_head_ref = re.sub(r'^refs/heads/', '', self.head_ref)
         merge = execute(['git', 'config', '--get',
-                         'branch.%s.merge' % short_head],
+                         'branch.%s.merge' % self.short_head_ref],
                         ignore_errors=True).strip()
         remote = execute(['git', 'config', '--get',
-                          'branch.%s.remote' % short_head],
+                          'branch.%s.remote' % self.short_head_ref],
                          ignore_errors=True).strip()
 
         HEADS_PREFIX = 'refs/heads/'
@@ -2211,12 +2211,14 @@ class GitClient(SCMClient):
         if options.guess_summary and not options.summary:
             options.summary = execute(["git", "log", "--pretty=format:%s",
                                        "HEAD^.."], ignore_errors=True).strip()
+            current_branch_name = execute(["git", "symbolic-ref", "HEAD"])
 
         if options.guess_description and not options.description:
             options.description = execute(
                 ["git", "log", "--pretty=format:%s%n%n%b",
                  (parent_branch or self.merge_base) + ".."],
                 ignore_errors=True).strip()
+            options.description += "\n\navailable in branch che/%s" % self.short_head_ref
 
         return (diff_lines, parent_diff_lines)
 
