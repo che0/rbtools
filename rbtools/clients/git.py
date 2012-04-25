@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import re
 import sys
@@ -66,7 +67,7 @@ class GitClient(SCMClient):
         # repository was specified on command line.
         git_svn_dir = os.path.join(git_dir, 'svn')
 
-        if (not self.options.repository_url and
+        if (False and not self.options.repository_url and
             os.path.isdir(git_svn_dir) and len(os.listdir(git_svn_dir)) > 0):
             data = execute([self.git, "svn", "info"], ignore_errors=True)
 

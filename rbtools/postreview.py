@@ -129,7 +129,7 @@ class ReviewBoardHTTPBasicAuthHandler(urllib2.HTTPBasicAuthHandler):
             response = urllib2.HTTPBasicAuthHandler.retry_http_basic_auth(
                 self, *args, **kwargs)
 
-            if response.code != 401:
+            if response != None and response.code != 401:
                 self._retried = False
 
             return response
@@ -151,18 +151,8 @@ class ReviewBoardHTTPPasswordMgr(urllib2.HTTPPasswordMgr):
     def __init__(self, reviewboard_url, rb_user=None, rb_pass=None):
         self.passwd  = {}
         self.rb_url  = reviewboard_url
-        if rb_user != None:
-            self.rb_user = rb_user
-            self.rb_pass = rb_pass
-        else:
-            try:
-                config = ConfigParser.SafeConfigParser()
-                config.read(os.path.expanduser('~/.postreview'))
-                self.rb_user = config.get('http_auth', 'username')
-                self.rb_pass = config.get('http_auth', 'password')
-            except (ConfigParser.NoSectionError, ConfigParser.NoOptionError):
-                self.rb_user = None
-                self.rb_pass = None
+        self.rb_user = rb_user
+        self.rb_pass = rb_pass
 
     def find_user_password(self, realm, uri):
         if realm == 'Web API':
@@ -183,9 +173,12 @@ class ReviewBoardHTTPPasswordMgr(urllib2.HTTPPasswordMgr):
 
             return self.rb_user, self.rb_pass
         else:
-            # If this is an auth request for some other domain (since HTTP
-            # handlers are global), fall back to standard password management.
-            return urllib2.HTTPPasswordMgr.find_user_password(self, realm, uri)
+            try:
+                config = ConfigParser.SafeConfigParser()
+                config.read(os.path.expanduser('~/.postreview'))
+                return config.get('http_auth', 'username'), config.get('http_auth', 'password')
+            except (ConfigParser.NoSectionError, ConfigParser.NoOptionError):
+                return urllib2.HTTPPasswordMgr.find_user_password(self, realm, uri)
 
 
 class ReviewBoardServer(object):
