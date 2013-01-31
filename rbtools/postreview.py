@@ -131,7 +131,7 @@ class ReviewBoardHTTPBasicAuthHandler(urllib2.HTTPBasicAuthHandler):
             response = urllib2.HTTPBasicAuthHandler.retry_http_basic_auth(
                 self, *args, **kwargs)
 
-            if response != None and response.code != 401:
+            if response.code != 401:
                 self._retried = False
 
             return response
@@ -159,6 +159,13 @@ class ReviewBoardHTTPPasswordMgr(urllib2.HTTPPasswordMgr):
     def find_user_password(self, realm, uri):
         if realm == 'Web API':
             if self.rb_user is None or self.rb_pass is None:
+                try:
+                    config = ConfigParser.SafeConfigParser()
+                    config.read(os.path.expanduser('~/.postreview'))
+                    return config.get('http_auth', 'username'), config.get('http_auth', 'password')
+                except (ConfigParser.NoSectionError, ConfigParser.NoOptionError):
+                    pass
+                
                 if options.diff_filename == '-':
                     die('HTTP authentication is required, but cannot be '
                         'used with --diff-filename=-')
@@ -178,13 +185,7 @@ class ReviewBoardHTTPPasswordMgr(urllib2.HTTPPasswordMgr):
 
             return self.rb_user, self.rb_pass
         else:
-            try:
-                config = ConfigParser.SafeConfigParser()
-                config.read(os.path.expanduser('~/.postreview'))
-                return config.get('http_auth', 'username'), config.get('http_auth', 'password')
-            except (ConfigParser.NoSectionError, ConfigParser.NoOptionError):
-                return urllib2.HTTPPasswordMgr.find_user_password(self, realm, uri)
-
+            return urllib2.HTTPPasswordMgr.find_user_password(self, realm, uri)
 
 class ReviewBoardServer(object):
     """
