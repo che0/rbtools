@@ -13,11 +13,14 @@ class SCMClient(object):
     A base representation of an SCM tool for fetching repository information
     and generating diffs.
     """
+    name = None
 
-    def __init__(self, user_config=None, configs=[], options=None):
+    def __init__(self, user_config=None, configs=[], options=None,
+                 capabilities=None):
         self.user_config = user_config
         self.configs = configs
         self.options = options
+        self.capabilities = capabilities
 
     def get_repository_info(self):
         return None
@@ -122,6 +125,7 @@ class RepositoryInfo(object):
 def load_scmclients(options):
     global SCMCLIENTS
 
+    from rbtools.clients.bazaar import BazaarClient
     from rbtools.clients.clearcase import ClearCaseClient
     from rbtools.clients.cvs import CVSClient
     from rbtools.clients.git import GitClient
@@ -131,6 +135,7 @@ def load_scmclients(options):
     from rbtools.clients.svn import SVNClient
 
     SCMCLIENTS = [
+        BazaarClient(options=options),
         CVSClient(options=options),
         ClearCaseClient(options=options),
         GitClient(options=options),
@@ -152,6 +157,7 @@ def scan_usable_client(options):
 
     # Try to find the SCM Client we're going to be working with.
     for tool in SCMCLIENTS:
+        logging.debug('Checking for a %s repository...' % tool.name)
         repository_info = tool.get_repository_info()
 
         if repository_info:

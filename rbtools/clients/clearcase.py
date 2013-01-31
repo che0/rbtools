@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+from pkg_resources import parse_version
 
 from rbtools.api.errors import APIError
 from rbtools.clients import SCMClient, RepositoryInfo
@@ -23,6 +24,7 @@ class ClearCaseClient(SCMClient):
     information and generates compatible diffs.
     This client assumes that cygwin is installed on windows.
     """
+    name = 'ClearCase'
     viewtype = None
 
     def __init__(self, **kwargs):
@@ -72,13 +74,18 @@ class ClearCaseClient(SCMClient):
         if "Error: " in vobstag:
             die("To generate diff run post-review inside vob.")
 
+        root_path = execute(["cleartool", "pwv", "-root"],
+                              ignore_errors=True).strip()
+        if "Error: " in root_path:
+            die("To generate diff run post-review inside view.")
+
         # From current working directory cut path to VOB.
         # VOB's tag contain backslash character before VOB's name.
         # I hope that first character of VOB's tag like '\new_proj'
         # won't be treat as new line character but two separate:
         # backslash and letter 'n'
         cwd = os.getcwd()
-        base_path = cwd[:cwd.find(vobstag) + len(vobstag)]
+        base_path = cwd[:len(root_path) + len(vobstag)]
 
         return ClearCaseRepositoryInfo(path=base_path,
                               base_path=base_path,
@@ -385,7 +392,7 @@ class ClearCaseRepositoryInfo(RepositoryInfo):
         # We didn't found uuid but if version is >= 1.5.3
         # we can try to use VOB's name hoping it is better
         # than current VOB's path.
-        if server.rb_version >= '1.5.3':
+        if parse_version(server.rb_version) >= parse_version('1.5.3'):
             self.path = cpath.split(self.vobstag)[1]
 
         # We didn't find a matching repository on the server.

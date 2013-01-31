@@ -15,6 +15,8 @@ class GitClient(SCMClient):
     compatible diffs. This will attempt to generate a diff suitable for the
     remote repository, whether git, SVN or Perforce.
     """
+    name = 'Git'
+
     def __init__(self, **kwargs):
         super(GitClient, self).__init__(**kwargs)
         # Store the 'correct' way to invoke git, just plain old 'git' by
@@ -276,8 +278,15 @@ class GitClient(SCMClient):
                                  split_lines=True)
             return self.make_svn_diff(ancestor, diff_lines)
         elif self.type == "git":
-            return execute([self.git, "diff", "--no-color", "--full-index",
-                            "--no-ext-diff", "--ignore-submodules", rev_range])
+            cmdline = [self.git, "diff", "--no-color", "--full-index",
+                       "--no-ext-diff", "--ignore-submodules", "--no-renames",
+                       rev_range]
+
+            if (self.capabilities is not None and
+                self.capabilities.has_capability('diffs', 'moved_files')):
+                cmdline.append('-M')
+
+            return execute(cmdline)
 
         return None
 
